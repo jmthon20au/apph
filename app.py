@@ -3,17 +3,18 @@ import os
 import logging
 from datetime import datetime, time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters, Defaults
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-# إعداد السجلات
+# --- إعداد السجلات ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- الإعدادات الأساسية ---
 TOKEN = "8410743999:AAH7_oW6bzEGFXz10Lcte0QiHzmwEH_S-uk"
 OWNER_ID = 7769271031 
-CHANNEL_ID = "@N_QQ_H"  # اليوزر الصحيح بالشارحات
+CHANNEL_ID = "@N_QQ_H"
 DB_NAME = 'tasks_bot.db'
 
+# --- وظائف قاعدة البيانات ---
 def db_query(query, params=(), commit=False):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -33,6 +34,7 @@ def init_db():
     db_query('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''', commit=True)
     db_query("INSERT OR IGNORE INTO settings (key, value) VALUES ('force_sub', 'on')", commit=True)
 
+# --- الوظائف المساعدة ---
 async def check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id == OWNER_ID: return True
@@ -47,8 +49,9 @@ async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
     res = db_query("SELECT value FROM settings WHERE key='backup_group_id'")
     if res:
         try:
-            with open(DB_NAME, 'rb') as f:
-                await context.bot.send_document(chat_id=int(res[0][0]), document=f, caption=f"🛡 نسخة احتياطية\n⏰ {datetime.now().strftime('%I:%M %p')}")
+            if os.path.exists(DB_NAME):
+                with open(DB_NAME, 'rb') as f:
+                    await context.bot.send_document(chat_id=int(res[0][0]), document=f, caption=f"🛡 نسخة احتياطية\n⏰ {datetime.now().strftime('%I:%M %p')}")
         except Exception as e: logging.error(f"Backup Error: {e}")
 
 async def daily_reset_job(context: ContextTypes.DEFAULT_TYPE):
@@ -66,11 +69,11 @@ def main_menu(user_id):
     keyboard.append([InlineKeyboardButton("👨‍💻 المطور", url="https://t.me/I_QQ_Q")])
     return InlineKeyboardMarkup(keyboard)
 
+# --- معالجات الأوامر والرسائل ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # هنا تم تعديل طريقة عرض اليوزر لضمان ظهور الشارحات
     if not await check_sub(update, context):
-        safe_channel = CHANNEL_ID.replace("_", "\\_") # معالجة الشارحات برمجياً
+        safe_channel = CHANNEL_ID.replace("_", "\\_")
         return await update.message.reply_text(f"⚠️ يجب عليك الاشتراك في القناة أولاً:\n{safe_channel}", 
             parse_mode='MarkdownV2',
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("إضغط هنا للاشتراك", url=f"https://t.me/{CHANNEL_ID[1:]}")]]))
@@ -85,7 +88,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"مرحباً بك مجدداً 🚀", reply_markup=main_menu(user.id))
 
-# --- معالج الأزرار المطور ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; user_id = query.from_user.id; await query.answer()
 
@@ -95,10 +97,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("تم التفعيل بنجاح! إليك القائمة الرئيسية:", reply_markup=main_menu(user_id))
 
     elif query.data == 'settings' and user_id == OWNER_ID:
-        status = db_query("SELECT value FROM settings WHERE key='force_sub'")[0][0]
+        status_res = db_query("SELECT value FROM settings WHERE key='force_sub'")
+        status = status_res[0][0] if status_res else "on"
         kb = [[InlineKeyboardButton(f"🚫 إيقاف الاشتراك" if status == 'on' else "✅ تشغيل الاشتراك", callback_data='toggle_sub')],
-              [InlineKeyboardButton("🔄 استرجاع DB", callback_data='ask_db')],
-              [InlineKeyboardButton("⚠️ تصفير شامل", callback_data='reset_all')],
               [InlineKeyboardButton("⬅️ رجوع", callback_data='back')]]
         await query.edit_message_text(f"⚙️ لوحة المسؤول | الاشتراك: {status}", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -108,10 +109,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("UPDATE settings SET value=? WHERE key='force_sub'", (new_val,), commit=True)
         await query.edit_message_text(f"✅ تم تحويل حالة الاشتراك إلى: {new_val}", reply_markup=main_menu(user_id))
 
-    elif query.data == 'cancel_input':
-        context.user_data['state'] = None
-        await query.edit_message_text("❌ تم إلغاء العملية.", reply_markup=main_menu(user_id))
-
     elif query.data == 'list_tasks':
         await show_task_list(query, user_id)
 
@@ -120,47 +117,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("UPDATE tasks SET status = CASE WHEN status='pending' THEN 'done' ELSE 'pending' END WHERE id=? AND user_id=?", (tid, user_id), commit=True)
         await show_task_list(query, user_id)
 
-    elif query.data == 'today_notes':
-        today = datetime.now().strftime("%Y-%m-%d")
-        rows = db_query("SELECT note FROM notes WHERE user_id=? AND day_only=?", (user_id, today))
-        msg = f"📒 ملاحظات اليوم:\n\n" + ("\n".join([f"📌 {r[0]}" for r in rows]) if rows else "لا يوجد.")
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data='back')]]))
-
-    elif query.data == 'view_archive':
-        days = db_query("SELECT DISTINCT day_only FROM tasks WHERE user_id=? UNION SELECT DISTINCT day_only FROM notes WHERE user_id=? ORDER BY day_only DESC", (user_id, user_id))
-        if not days: return await query.edit_message_text("الأرشيف فارغ.", reply_markup=main_menu(user_id))
-        kb = [[InlineKeyboardButton(f"🗓 {d[0]}", callback_data=f"arch_{d[0]}")] for d in days if d[0]]
-        kb.append([InlineKeyboardButton("⬅️ رجوع", callback_data='back')])
-        await query.edit_message_text("🗓 اختر التاريخ المطلوب:", reply_markup=InlineKeyboardMarkup(kb))
-
-    elif query.data.startswith('arch_'):
-        day = query.data.split('_')[1]
-        t_rows = db_query("SELECT task, status FROM tasks WHERE user_id=? AND day_only=?", (user_id, day))
-        n_rows = db_query("SELECT note FROM notes WHERE user_id=? AND day_only=?", (user_id, day))
-        msg = f"📅 سجل يوم {day}:\n\n📋 المهام:\n" + ("\n".join([f"{'✅' if r[1]=='done' else '⏳'} {r[0]}" for r in t_rows]) if t_rows else "لا يوجد")
-        msg += "\n\n📝 الملاحظات:\n" + ("\n".join([f"📌 {r[0]}" for r in n_rows]) if n_rows else "لا يوجد")
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع للأرشيف", callback_data='view_archive')]]))
-
-    elif query.data == 'edit_task_list':
-        rows = db_query("SELECT id, task FROM tasks WHERE user_id=?", (user_id,))
-        if not rows: return await query.edit_message_text("لا توجد مهام لتعديلها.", reply_markup=main_menu(user_id))
-        kb = [[InlineKeyboardButton(f"✏️ {r[1]}", callback_data=f"pedit_{r[0]}")] for r in rows]
-        kb.append([InlineKeyboardButton("⬅️ رجوع", callback_data='back')])
-        await query.edit_message_text("اختر المهمة لتعديلها:", reply_markup=InlineKeyboardMarkup(kb))
-
-    elif query.data.startswith('pedit_'):
-        context.user_data['state'] = 'editing_task'
-        context.user_data['edit_id'] = query.data.split('_')[1]
-        await query.message.reply_text("✏️ أرسل النص الجديد للمهمة:")
+    elif query.data == 'back':
+        await query.edit_message_text("القائمة الرئيسية للبوت:", reply_markup=main_menu(user_id))
 
     elif query.data in ['add_task', 'add_note']:
         context.user_data['state'] = query.data
-        await query.message.reply_text("✏️ أرسل النص الذي تريد حفظه:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data='cancel_input')]]))
-
-    elif query.data == 'how_it_works':
-        await query.edit_message_text("📖 آلية العمل: المهام يومية تُحذف عند منتصف الليل، الملاحظات دائمة والأرشيف يحفظ تاريخك بكل سهولة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data='back')]]))
-
-    elif query.data == 'back': await query.edit_message_text("القائمة الرئيسية للبوت:", reply_markup=main_menu(user_id))
+        await query.message.reply_text("✏️ أرسل النص الذي تريد حفظه:")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id; state = context.user_data.get('state')
@@ -168,15 +130,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, now = update.message.text, datetime.now()
     dt_full, dt_day = now.strftime("%Y-%m-%d %I:%M %p"), now.strftime("%Y-%m-%d")
     
-    if state == 'editing_task':
-        db_query("UPDATE tasks SET task=? WHERE id=? AND user_id=?", (text, context.user_data.get('edit_id'), user_id), commit=True)
-    elif state == 'add_task':
+    if state == 'add_task':
         db_query("INSERT INTO tasks (user_id, task, status, date, day_only) VALUES (?, ?, 'pending', ?, ?)", (user_id, text, dt_full, dt_day), commit=True)
     elif state == 'add_note':
         db_query("INSERT INTO notes (user_id, note, date, day_only) VALUES (?, ?, ?, ?)", (user_id, text, dt_full, dt_day), commit=True)
 
     context.user_data['state'] = None
-    await update.message.reply_text("✅ تم تنفيذ العملية بنجاح.", reply_markup=main_menu(user_id))
+    await update.message.reply_text("✅ تم الحفظ بنجاح.", reply_markup=main_menu(user_id))
 
 async def show_task_list(query, user_id):
     rows = db_query("SELECT id, task, status FROM tasks WHERE user_id=?", (user_id,))
@@ -190,19 +150,21 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('backup_group_id', ?)", (str(update.message.chat_id),), commit=True)
         await update.message.reply_text("✅ تم ربط هذا الكروب بنظام النسخ الاحتياطي.")
 
+# --- تشغيل البوت النهائي ---
 if __name__ == '__main__':
     init_db()
-    # تم تعديل الـ Defaults لضمان التوافق مع MarkdownV2
-    app = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).build()
     
-    app.job_queue.run_repeating(auto_backup_job, interval=60, first=10)
-    app.job_queue.run_daily(daily_reset_job, time=time(0, 0, 0))
+    # الجدولة الزمنية
+    if application.job_queue:
+        application.job_queue.run_repeating(auto_backup_job, interval=3600, first=10)
+        application.job_queue.run_daily(daily_reset_job, time=time(0, 0, 0))
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("n", set_group))
-    app.add_handler(CallbackQueryHandler(button_handler, block=False))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg, block=False))
+    # إضافة المعالجات
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("n", set_group))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     
-    print("🚀 البوت انطلق الآن باليوزر الصحيح وبأقصى سرعة...")
-    if __name__ == '__main__':
-    application.run_polling()  # تأكد من وجود 4 مسافات قبل هذه الكلمة
+    print("🚀 البوت يعمل الآن بنجاح على Railway...")
+    application.run_polling(drop_pending_updates=True)
