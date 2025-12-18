@@ -204,4 +204,7 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg, block=False))
     
     print("🚀 البوت انطلق الآن باليوزر الصحيح وبأقصى سرعة...")
-    app.run_polling(drop_pending_updates=True)
+    if __name__ == '__main__':
+    # كود تشغيل البوت الخاص بك هنا
+    application.run_polling() # أو الطريقة التي تستخدمها لتشغيل البوت
+
