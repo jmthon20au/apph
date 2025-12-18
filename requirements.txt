@@ -1,4 +1,4 @@
-Entergunicorn
+gunicorn
 python-telegram-bot==20.8
 ptb-main-loop==0.0.1
 apscheduler==3.10.4
