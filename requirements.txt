@@ -1,4 +1,3 @@
-gunicorn
 python-telegram-bot
 apscheduler
 httpx
