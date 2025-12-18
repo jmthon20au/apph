@@ -1,29 +1,39 @@
 import sqlite3
-import os
 import logging
 from datetime import datetime, time
+import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters, Defaults
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 # إعداد السجلات
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- الإعدادات الأساسية ---
-TOKEN = "8410743999:AAHs3F1XIVGtYwnEIoFcL7WhN9GOaqheihc"
+TOKEN = "8410743999:AAGeo0XYnkzwyoU-SlrZt8hEh_g1hu99-jg"
 OWNER_ID = 7769271031 
-CHANNEL_ID = "@N_QQ_H"  # اليوزر الصحيح بالشارحات
+CHANNEL_ID = "@N_QQ_H" 
 DB_NAME = 'tasks_bot.db'
+
+# دالة لتنظيف النصوص لـ MarkdownV2 لتجنب الأخطاء
+def escape_md(text):
+    if not text: return ""
+    return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
 def db_query(query, params=(), commit=False):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute(query, params)
-    if commit:
-        conn.commit()
-        res = True
-    else:
-        res = cursor.fetchall()
-    conn.close()
+    try:
+        cursor.execute(query, params)
+        if commit:
+            conn.commit()
+            res = True
+        else:
+            res = cursor.fetchall()
+    except Exception as e:
+        logging.error(f"Database Error: {e}")
+        res = False
+    finally:
+        conn.close()
     return res
 
 def init_db():
@@ -41,7 +51,8 @@ async def check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except: return False
+    except Exception:
+        return False
 
 async def auto_backup_job(context: ContextTypes.DEFAULT_TYPE):
     res = db_query("SELECT value FROM settings WHERE key='backup_group_id'")
@@ -68,37 +79,37 @@ def main_menu(user_id):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # هنا تم تعديل طريقة عرض اليوزر لضمان ظهور الشارحات
     if not await check_sub(update, context):
-        safe_channel = CHANNEL_ID.replace("_", "\\_") # معالجة الشارحات برمجياً
+        safe_channel = escape_md(CHANNEL_ID)
         return await update.message.reply_text(f"⚠️ يجب عليك الاشتراك في القناة أولاً:\n{safe_channel}", 
             parse_mode='MarkdownV2',
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("إضغط هنا للاشتراك", url=f"https://t.me/{CHANNEL_ID[1:]}")]]))
 
     res = db_query("SELECT accepted FROM users WHERE user_id=?", (user.id,))
     if not res:
-        welcome_msg = (f"👋 أهلاً بك {user.first_name}\n\n📖 *آلية عمل البوت:*\n"
-                       "• المهام يومية وتُحذف 12 ليلاً\.\n• الملاحظات دائمة وتُحفظ بالأرشيف\.\n"
+        welcome_msg = (f"👋 أهلاً بك {escape_md(user.first_name)}\n\n"
+                       "📖 *آلية عمل البوت:*\n"
+                       "• المهام يومية وتُحذف 12 ليلاً\.\n"
+                       "• الملاحظات دائمة وتُحفظ بالأرشيف\.\n"
                        "• البوت آمن ويقوم بنسخ بياناتك دورياً\.")
         return await update.message.reply_text(welcome_msg, parse_mode='MarkdownV2',
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ نعم، أنا جاهز لاستعمال البوت", callback_data='accept_terms')]]))
     
     await update.message.reply_text(f"مرحباً بك مجدداً 🚀", reply_markup=main_menu(user.id))
 
-# --- معالج الأزرار المطور ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; user_id = query.from_user.id; await query.answer()
 
     if query.data == 'accept_terms':
         db_query("INSERT OR REPLACE INTO users (user_id, accepted, username, full_name) VALUES (?, 1, ?, ?)", (user_id, query.from_user.username, query.from_user.full_name), commit=True)
-        await context.bot.send_message(chat_id=OWNER_ID, text=f"🔔 مستخدم جديد: {query.from_user.full_name}")
+        try: await context.bot.send_message(chat_id=OWNER_ID, text=f"🔔 مستخدم جديد: {query.from_user.full_name}")
+        except: pass
         await query.edit_message_text("تم التفعيل بنجاح! إليك القائمة الرئيسية:", reply_markup=main_menu(user_id))
 
     elif query.data == 'settings' and user_id == OWNER_ID:
-        status = db_query("SELECT value FROM settings WHERE key='force_sub'")[0][0]
+        status_res = db_query("SELECT value FROM settings WHERE key='force_sub'")
+        status = status_res[0][0] if status_res else "on"
         kb = [[InlineKeyboardButton(f"🚫 إيقاف الاشتراك" if status == 'on' else "✅ تشغيل الاشتراك", callback_data='toggle_sub')],
-              [InlineKeyboardButton("🔄 استرجاع DB", callback_data='ask_db')],
-              [InlineKeyboardButton("⚠️ تصفير شامل", callback_data='reset_all')],
               [InlineKeyboardButton("⬅️ رجوع", callback_data='back')]]
         await query.edit_message_text(f"⚙️ لوحة المسؤول | الاشتراك: {status}", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -107,10 +118,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_val = 'off' if current == 'on' else 'on'
         db_query("UPDATE settings SET value=? WHERE key='force_sub'", (new_val,), commit=True)
         await query.edit_message_text(f"✅ تم تحويل حالة الاشتراك إلى: {new_val}", reply_markup=main_menu(user_id))
-
-    elif query.data == 'cancel_input':
-        context.user_data['state'] = None
-        await query.edit_message_text("❌ تم إلغاء العملية.", reply_markup=main_menu(user_id))
 
     elif query.data == 'list_tasks':
         await show_task_list(query, user_id)
@@ -123,15 +130,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'today_notes':
         today = datetime.now().strftime("%Y-%m-%d")
         rows = db_query("SELECT note FROM notes WHERE user_id=? AND day_only=?", (user_id, today))
-        msg = f"📒 ملاحظات اليوم:\n\n" + ("\n".join([f"📌 {r[0]}" for r in rows]) if rows else "لا يوجد.")
+        msg = "📒 ملاحظات اليوم:\n\n" + ("\n".join([f"📌 {r[0]}" for r in rows]) if rows else "لا يوجد.")
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data='back')]]))
 
     elif query.data == 'view_archive':
-        days = db_query("SELECT DISTINCT day_only FROM tasks WHERE user_id=? UNION SELECT DISTINCT day_only FROM notes WHERE user_id=? ORDER BY day_only DESC", (user_id, user_id))
-        if not days: return await query.edit_message_text("الأرشيف فارغ.", reply_markup=main_menu(user_id))
+        days = db_query("SELECT DISTINCT day_only FROM tasks WHERE user_id=? UNION SELECT DISTINCT day_only FROM notes WHERE user_id=? ORDER BY day_only DESC LIMIT 10", (user_id, user_id))
+        if not days: return await query.edit_message_text("الأرشيف فارغ حالياً.", reply_markup=main_menu(user_id))
         kb = [[InlineKeyboardButton(f"🗓 {d[0]}", callback_data=f"arch_{d[0]}")] for d in days if d[0]]
         kb.append([InlineKeyboardButton("⬅️ رجوع", callback_data='back')])
-        await query.edit_message_text("🗓 اختر التاريخ المطلوب:", reply_markup=InlineKeyboardMarkup(kb))
+        await query.edit_message_text("🗓 اختر التاريخ المطلوب (آخر 10 أيام):", reply_markup=InlineKeyboardMarkup(kb))
 
     elif query.data.startswith('arch_'):
         day = query.data.split('_')[1]
@@ -155,16 +162,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data in ['add_task', 'add_note']:
         context.user_data['state'] = query.data
-        await query.message.reply_text("✏️ أرسل النص الذي تريد حفظه:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data='cancel_input')]]))
+        await query.message.reply_text("✏️ أرسل النص الذي تريد حفظه:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ إلغاء", callback_data='back')]]))
 
     elif query.data == 'how_it_works':
         await query.edit_message_text("📖 آلية العمل: المهام يومية تُحذف عند منتصف الليل، الملاحظات دائمة والأرشيف يحفظ تاريخك بكل سهولة.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data='back')]]))
 
-    elif query.data == 'back': await query.edit_message_text("القائمة الرئيسية للبوت:", reply_markup=main_menu(user_id))
+    elif query.data == 'back':
+        context.user_data['state'] = None
+        await query.edit_message_text("القائمة الرئيسية للبوت:", reply_markup=main_menu(user_id))
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id; state = context.user_data.get('state')
+    user_id = update.effective_user.id
+    state = context.user_data.get('state')
     if not state or not update.message.text: return
+    
     text, now = update.message.text, datetime.now()
     dt_full, dt_day = now.strftime("%Y-%m-%d %I:%M %p"), now.strftime("%Y-%m-%d")
     
@@ -176,32 +187,33 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db_query("INSERT INTO notes (user_id, note, date, day_only) VALUES (?, ?, ?, ?)", (user_id, text, dt_full, dt_day), commit=True)
 
     context.user_data['state'] = None
-    await update.message.reply_text("✅ تم تنفيذ العملية بنجاح.", reply_markup=main_menu(user_id))
+    await update.message.reply_text("✅ تم الحفظ بنجاح.", reply_markup=main_menu(user_id))
 
 async def show_task_list(query, user_id):
     rows = db_query("SELECT id, task, status FROM tasks WHERE user_id=?", (user_id,))
     if not rows: return await query.edit_message_text("📋 قائمتك حالياً فارغة.", reply_markup=main_menu(user_id))
     kb = [[InlineKeyboardButton(f"{'✅' if r[2]=='done' else '⏳'} {r[1]}", callback_data=f"tg_{r[0]}")] for r in rows]
     kb.append([InlineKeyboardButton("⬅️ رجوع", callback_data='back')])
-    await query.edit_message_text("📋 قائمة مهامك الحالية:", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("📋 قائمة مهامك الحالية (اضغط للمسح/الإكمال):", reply_markup=InlineKeyboardMarkup(kb))
 
 async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id == OWNER_ID:
         db_query("INSERT OR REPLACE INTO settings (key, value) VALUES ('backup_group_id', ?)", (str(update.message.chat_id),), commit=True)
-        await update.message.reply_text("✅ تم ربط هذا الكروب بنظام النسخ الاحتياطي.")
+        await update.message.reply_text("✅ تم ربط هذا الكروب بنظام النسخ الاحتياطي بنجاح.")
 
 if __name__ == '__main__':
     init_db()
-    # تم تعديل الـ Defaults لضمان التوافق مع MarkdownV2
     app = Application.builder().token(TOKEN).build()
     
-    app.job_queue.run_repeating(auto_backup_job, interval=60, first=10)
-    app.job_queue.run_daily(daily_reset_job, time=time(0, 0, 0))
+    # الجدولة الزمنية
+    if app.job_queue:
+        app.job_queue.run_repeating(auto_backup_job, interval=3600, first=10) # كل ساعة
+        app.job_queue.run_daily(daily_reset_job, time=time(0, 0, 0))
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("n", set_group))
-    app.add_handler(CallbackQueryHandler(button_handler, block=False))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg, block=False))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
     
-    print("🚀 البوت انطلق الآن باليوزر الصحيح وبأقصى سرعة...")
+    print("🚀 البوت يعمل الآن بكفاءة 100%...")
     app.run_polling(drop_pending_updates=True)
