@@ -1,0 +1,6 @@
+Entergunicorn
+python-telegram-bot==20.8
+ptb-main-loop==0.0.1
+apscheduler==3.10.4
+httpx==0.27.0
+
